@@ -154,7 +154,7 @@ def transform_to_dataframe(wallet_address, transactions):
                     else:
                         typeop = 'BUY'
                         token_amount = transfer.get('tokenAmount')
-        if source == 'SYSTEM_PROGRAM':
+        elif source == 'SYSTEM_PROGRAM':
             for instruction in tx.get('instructions', []):
                 if instruction.get('programId') == "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P":
                     source = "PUMPFUN"
@@ -171,24 +171,28 @@ def transform_to_dataframe(wallet_address, transactions):
                         if account_entry.get('account') == fee_payer:
                             nativeChange = account_entry.get('nativeBalanceChange')
                             source_amount = abs(nativeChange) / 1_000_000_000
+        else:
+            continue
         if len(mints) > 1:
             print(f"Alert: Multiple different mints found in transaction {tx.get('signature', '')}: {mints}")
         
         mint_value = mints.pop() if mints else None
 
-        data.append({
-            'wallet': tx.get('feePayer', ''),
-            'mint': mint_value,
-            'signature': tx.get('signature', ''),
-            'slot': tx.get('slot', 0),
-            'timestamp': tx.get('timestamp', 0),
-            'fee': tx.get('fee', 0),
-            'source': source,
-            'typetx': tx.get('type', ''),
-            'typeop': typeop,
-            'source_amount': source_amount,
-            'token_amount': token_amount,
-        })
+        if source.upper() in ['PUMPFUN', 'JUPITER', 'RAYDIUM']:
+            print(source)
+            data.append({
+                'wallet': tx.get('feePayer', ''),
+                'mint': mint_value,
+                'signature': tx.get('signature', ''),
+                'slot': tx.get('slot', 0),
+                'timestamp': tx.get('timestamp', 0),
+                'fee': tx.get('fee', 0),
+                'source': source,
+                'typetx': tx.get('type', ''),
+                'typeop': typeop,
+                'source_amount': source_amount,
+                'token_amount': token_amount,
+            })
 
     if not data:
         return pd.DataFrame
