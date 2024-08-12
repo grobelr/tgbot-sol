@@ -21,6 +21,7 @@ load_dotenv()
 HELIUS_API = os.getenv('HELIUS_API')
 DATABASE_URL = os.getenv('DATABASE_URL')
 TABLE_NAME = os.getenv('TABLE_NAME')
+BOT_API = os.getenv('BOT_API')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Hi! Use /wallet <address> to fetch wallet information")
@@ -73,7 +74,7 @@ async def fetch_wallet_data(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 def main() -> None:
     """Run bot."""
     # Create the Application and pass it your bot's token.
-    application = Application.builder().token("6891497433:AAHe7DpyFa4a-G-zoUpltw0FkjK31C4kk2U").build()
+    application = Application.builder().token(BOT_API).build()
 
     # on different commands - answer in Telegram
     application.add_handler(CommandHandler(["start", "help"], start))
