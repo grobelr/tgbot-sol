@@ -29,57 +29,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def send_wallet_info(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send wallet info"""
     job = context.job
-    ## Fetch information from helius
-    # txs = fetch_transactions(job.data, HELIUS_API)
-    # df = transform_to_dataframe(txs)
-    # save_to_database(df, DATABASE_URL, TABLE_NAME)
-    # await context.bot.send_message(job.chat_id, text=f"Wallet address {job.data} saved to database, number of txs: {len(txs)}")
-    await context.bot.send_message(job.chat_id, text=f"Generating stats")
+    await context.bot.send_message(job.chat_id, text=f"Wait a moment.. Generating stats")
+    # Get the last signature from the database
+    last_signature = get_last_signature(job.data)
+    # fetch latest transactions and save to DB.
+    fetch_transactions(job.data, HELIUS_API, last_signature)
 
-    ## Start the process
-    df_from_db = generate_dt(DATABASE_URL, TABLE_NAME)
-    print(df_from_db)
-
-    # Group by 'signature' and apply the aggregation
-    grouped_df = df_from_db.groupby('signature').agg(lambda x: ' | '.join(x.astype(str))).reset_index()
-    print(grouped_df)
-
-    # Expand grouped data
-    expanded_df = expand_grouped_data(grouped_df)
-
-    # Filter for SWAP transactions
-    expanded_df = expanded_df[expanded_df['type_1'] == 'SWAP'].copy()
-    expanded_df = expanded_df.sort_values(by='timestamp_1')
-    print(expanded_df)
-
-    # Drop unnecessary columns
-    expanded_df.drop(columns=['wallet_1', 'wallet_2', 'type_1', 'type_2', 'source_2', 'fee_2', 'feePayer_2', 'slot_2', 'timestamp_2', 'tokenStandard_1', 'tokenStandard_2'], inplace=True)
-
-    # Determine transaction actions
-    expanded_df = expanded_df.apply(determine_transaction_action, axis=1)
-
-    # Update sol_spent and sol_received
-    expanded_df = update_sol_spent_received(expanded_df)
-
-    # Create token and trade size columns
-    expanded_df = create_token_trade_size(expanded_df)
-
-    # Calculate previous and new amounts
-    expanded_df = calculate_amounts(expanded_df)
-
-    # Calculate trade price
-    expanded_df = calculate_trade_price(expanded_df)
-
-    # Calculate final PnL
-    expanded_df = calculate_final_pnl(expanded_df)
-
-    # Calculate accumulated PnL
-    expanded_df = calculate_accumulated_pnl(expanded_df)
-
-    # Filter PnL DataFrame
-    pnl_df = filter_pnl_dataframe(expanded_df)
-    print(pnl_df)
-    await context.bot.send_message(job.chat_id, text='done!')
+    # fetch all txs from db
+    txs = select_from_db(job.data)
+    await context.bot.send_message(job.chat_id, text=f"Number of transactions filtered: {len(txs)}")
 
 def remove_job_if_exists(name: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Remove job with given name. Returns whether job was removed."""
