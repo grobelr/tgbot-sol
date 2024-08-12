@@ -1,0 +1,4 @@
+.env
+.venv
+transactions.db
+helius_txs.db
