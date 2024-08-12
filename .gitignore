@@ -2,3 +2,4 @@
 .venv
 transactions.db
 helius_txs.db
+__pycache__

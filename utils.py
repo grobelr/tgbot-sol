@@ -133,7 +133,7 @@ def transform_to_dataframe(wallet_address, transactions):
         source = tx.get('source')
         source_amount = 0
         token_amount = 0
-        if source == 'RAYDIUM':
+        if source == 'RAYDIUM' or 'JUPITER':
             ## Resolve buy/sell raydium swap
             for transfer in tx.get('tokenTransfers', []):
                 mint = transfer.get('mint')
@@ -157,10 +157,8 @@ def transform_to_dataframe(wallet_address, transactions):
         if source == 'SYSTEM_PROGRAM':
             print(source)
             for instruction in tx.get('instructions', []):
-                print(instruction)
                 if instruction.get('programId') == "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P":
                     source = "PUMPFUN"
-                    print(source)
                     for transfer in tx.get('tokenTransfers', []):
                         mint = transfer.get('mint')
                         mints.add(mint)
