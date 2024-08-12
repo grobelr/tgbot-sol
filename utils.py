@@ -155,7 +155,6 @@ def transform_to_dataframe(wallet_address, transactions):
                         typeop = 'BUY'
                         token_amount = transfer.get('tokenAmount')
         if source == 'SYSTEM_PROGRAM':
-            print(source)
             for instruction in tx.get('instructions', []):
                 if instruction.get('programId') == "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P":
                     source = "PUMPFUN"
