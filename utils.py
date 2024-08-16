@@ -155,7 +155,38 @@ def select_from_db(wallet_address):
     finally:
         # Close the session
         session.close()
-        
+
+def load_transactions_to_dataframe(wallet_address):
+    txs = fetch_transactions(wallet_address)
+    # Convert query results to list of dictionaries (needed for DataFrame conversion)
+    data = [
+        {
+            'wallet': tx.wallet_address,
+            'mint': tx.mint,
+            'signature': tx.signature,
+            'slot': tx.slot,
+            'timestamp': tx.blockTime,
+            'fee': tx.fee,
+            'source': tx.source,
+            'typetx': tx.typetx,
+            'typeop': tx.typeop,
+            'source_amount': tx.source_amount,
+            'token_amount': tx.token_amount,
+        }
+        for tx in txs
+    ]
+    
+    # Convert to DataFrame
+    if not data:
+        return pd.DataFrame()  # Return an empty DataFrame if no data
+    
+    df = pd.DataFrame(data)
+    
+    # Convert timestamp to datetime format
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+    
+    return df
+
 def transform_to_dataframe(wallet_address, transactions):
     data = []
     for tx in transactions:

@@ -13,18 +13,15 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 TABLE_NAME = os.getenv('TABLE_NAME')
 WALLET = os.getenv('WALLET')
 
-# tx = identify_transaction_type(txData)
-# print(tx)
-# exit()
+# # Step 1: Get all the signatures 
+# last_signature = get_last_signature(WALLET)
+# fetch_and_save_signatures(address=WALLET, last_signature=last_signature)
+# # Step 2: Process all txs
+# process_txs_from_sig(WALLET)
 
-# Get the last signature from the database
-last_signature = get_last_signature(WALLET)
-fetch_and_save_signatures(address=WALLET, last_signature=last_signature)
-
-process_txs_from_sig(WALLET)
-# df = transform_to_dataframe(WALLET, txs)
-# if not df.empty:
-#     save_to_database(df, DATABASE_URL, TABLE_NAME)
+# Step3: Load transactions to dataframe
+df = load_transactions_to_dataframe(WALLET)
+print(len(df))
 
 exit()
 

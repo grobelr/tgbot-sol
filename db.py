@@ -141,3 +141,9 @@ def save_tx_detail(wallet_address, simplified_tx):
         # Close the session
         session.close()
 
+def fetch_transactions(wallet_address):
+    session = Session()
+    # Query the transactions for the given wallet address
+    transactions = session.query(Transaction).filter_by(wallet_address=wallet_address).all()
+    return transactions
+
