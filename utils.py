@@ -1,106 +1,142 @@
 import requests
 import pandas as pd
-from sqlalchemy import create_engine, Column, Integer, Text, String, inspect, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-import re
 import numpy as np
 import json
-import re
 import time
+from db import *
+from decode_tx import *
 
-# Define the base class
-Base = declarative_base()
 
-# Define the model
-class Transaction(Base):
-    __tablename__ = 'helius_txs'
+def last_signature(wallet_address):
+    return get_last_signature(wallet_address)
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    wallet_address = Column(String, nullable=False)
-    signature = Column(String, nullable=False, unique=True)
-    data = Column(Text, nullable=False)
-
-# Initialize the database
-engine = create_engine('sqlite:///helius_txs.db')
-Base.metadata.create_all(engine)
-
-# Create a session
-Session = sessionmaker(bind=engine)
-
-def get_last_signature(wallet_address, table_name='helius_txs'):
-    session = Session()
-    # Ensure the table exists in the database
-    inspector = inspect(session.bind)
-    if table_name in inspector.get_table_names():
-        query = f'''
-            SELECT signature
-            FROM {table_name}
-            WHERE wallet_address = :wallet
-            ORDER BY json_extract(data, '$.timestamp') ASC
-            LIMIT 1
-        '''
-        result = session.execute(text(query), {'wallet': wallet_address}).fetchone()
-        if result and result[0]:  # Access the first element of the tuple
-            return result[0]
-    return None
+def process_txs_from_sig(wallet_address, max_retries=3, retry_delay=5):
+    sigs = return_not_processed_sigs(wallet_address)
+    total_sigs = len(sigs)
+    next_milestone = 1
+    print(f"Processing {total_sigs} transactions for wallet: {wallet_address}")
     
-def fetch_transactions(wallet_address, api_key, last_signature=None):
-    base_url = f'https://api.helius.xyz/v0/addresses/{wallet_address}/transactions'
-    params = {'api-key': api_key}
-    retries = 10
+    try:
+        for idx, sig in enumerate(sigs):
+            retries = 0
+            success = False
+            while retries < max_retries and not success:
+                try:
+                    # Fetch transaction details
+                    tx_details = fetch_transaction_details(sig.signature)
+                    if tx_details:
+                        simplified_tx = identify_transaction_type(tx_details)
+                        save_tx_detail(wallet_address, simplified_tx)
+                        success = True  # Mark success if everything went well
+                    else:
+                        print(f"Failed to fetch transaction details for signature: {sig.signature}")
+                except Exception as fetch_error:
+                    print(f"Error fetching transaction details for signature: {sig.signature}, retrying... {retries+1}/{max_retries}")
+                    retries += 1
+                    time.sleep(retry_delay)
+                
+                if not success and retries == max_retries:
+                    print(f"Max retries reached for signature: {sig.signature}. Skipping...")
 
-    # Create a session
-    session = Session()
+                # Delay between processing transactions
+                time.sleep(retry_delay)
+
+            # Calculate progress percentage
+            progress = ((idx + 1) / total_sigs) * 100
+
+            # Print progress at milestones (10%, 20%, ..., 100%)
+            if progress >= next_milestone:
+                print(f"Progress: {progress:.2f}% ({idx + 1}/{total_sigs})")
+                next_milestone += 10  # Move to the next milestone
+
+    except Exception as e:
+        print(f"An error occurred while processing transactions: {e} (Signature: {sig.signature})")
+
+
+def fetch_transaction_details(signature, rpc_url="https://api.mainnet-beta.solana.com"):
+    # Create the request payload
+    params = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTransaction",
+        "params": [
+            signature,
+            {
+                "encoding": "jsonParsed",  # You can use "jsonParsed" for parsed output
+                "commitment": "finalized",
+                "maxSupportedTransactionVersion": 0
+            }
+        ]
+    }
+
+    # Send the request
+    response = requests.post(rpc_url, json=params)
+    data = response.json()
+
+    # Check for errors
+    if 'error' in data:
+        print("Error fetching transaction details:", data['error'])
+        return None
+    return data
+
+def fetch_and_save_signatures(
+        address, 
+        rpc_url="https://api.mainnet-beta.solana.com", 
+        last_signature=None, 
+        limit=1000):
+    signatures = []
 
     while True:
-        if last_signature:
-            params['before'] = last_signature
+        params = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getSignaturesForAddress",
+            "params": [
+                address,
+                {
+                    "limit": limit,
+                    "before": last_signature  # Use last_signature to continue fetching
+                }
+            ]
+        }
 
-        url = base_url
-        print(f"Fetching transactions with URL: {url}, Params: {params}")  # Debugging line
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            if response.status_code == 200:
-                transactions = response.json()
-                if transactions:
-                    for transaction in transactions:
-                        save_transaction_to_db(session, wallet_address, transaction)  # Save each transaction to the DB
-                    last_signature = transactions[-1]['signature']
-                else:
-                    print("No more transactions available.")
-                    break
-            elif response.status_code == 400 or response.status_code == 404:
-                error_msg = response.json().get('error', '')
-                match = re.search(r"` parameter set to (.+)", error_msg)
-                if match:
-                    before_value = match.group(1).strip('. ')  # Strip trailing dot and space
-                    print(f"Extracted 'before' value: {before_value}")  # Debugging line
-                    last_signature = before_value
-                    continue
-                else:
-                    print(f"Error fetching transactions: {response.status_code} - {response.text}")
-                    break
-            else:
-                print(f"Error fetching transactions: {response.status_code} - {response.text}")
-                break
-        except requests.exceptions.Timeout:
-            print("Request timed out. Retrying...")
-            retries -= 1
-            if retries == 0:
-                print("Max retries reached. Exiting.")
-                break
-            time.sleep(5)
-        except requests.exceptions.RequestException as e:
-            print(f"Request failed: {e}")
+        response = requests.post(rpc_url, json=params)
+        data = response.json()
+
+        if 'error' in data:
+            print("Error fetching signatures:", data['error'])
             break
 
-    # Close the session
-    session.close()
+        # Extract signatures from the result
+        result = data.get('result', [])
+        if not result:
+            print("No more signatures to fetch.")
+            break
+
+        # Filter and append signatures
+        for item in result:
+            if 'err' in item and 'InstructionError' in str(item['err']):
+                item['succeed'] = False
+                item['err'] = json.dumps(item['err'])
+            else:
+                item['succeed'] = True
+            item.pop('memo')
+            item.pop('confirmationStatus')
+            save_signatures(address, item)
+
+        # Update the last_signature to continue fetching
+        last_signature = result[-1]['signature']
+
+        print(f"Fetched {len(result)} signatures, total after filtering: {len(signatures)}")
+        time.sleep(4)
+        
+        # If less than the limit is returned, we have reached the end
+        if len(result) < limit:
+            break
 
 def select_from_db(wallet_address):
     # Initialize the database and create a session
-    engine = create_engine('sqlite:///helius_txs.db')
+    engine = create_engine(DATABASE_URL)
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -220,7 +256,7 @@ def save_transaction_to_db(session, wallet_address, transaction_data):
         print(f"Failed to save transaction {signature}: {e}")
 
 def save_to_database(df, database_url, table_name):
-    engine = create_engine(database_url)
+    engine = (database_url)
     with engine.connect() as connection:
         df.to_sql(table_name, con=connection, if_exists='append', index=False)
 

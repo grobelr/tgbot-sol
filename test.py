@@ -1,6 +1,8 @@
 from utils import *
 from dotenv import load_dotenv
 import os
+from tx import txData
+from decode_tx import *
 
 # Load environment variables from .env file
 load_dotenv()
@@ -11,22 +13,18 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 TABLE_NAME = os.getenv('TABLE_NAME')
 WALLET = os.getenv('WALLET')
 
+# tx = identify_transaction_type(txData)
+# print(tx)
+# exit()
+
 # Get the last signature from the database
 last_signature = get_last_signature(WALLET)
+fetch_and_save_signatures(address=WALLET, last_signature=last_signature)
 
-# fetch latest transactions and save to DB.
-fetch_transactions(WALLET, HELIUS_API, last_signature)
-
-# fetch all txs from db
-txs = select_from_db(WALLET)
-
-# transform and save to db (everything)
-# TODO: transform just new txs.
-# 3QHi4kSpHTVjAeheTJ79F6eoTiaPbHfbpDkmQT1TCHuYPVTJJXYBZh2HnLvbUXjzDqCWv7i9F9tUk9e56wC6YgoY
-# 2QuyzrSSjs6ntMLBwGjUViiKvt688X6HytQprGkAWBsMySM6cJUqKoCsjauHYkv53jpmbML68UhyFnF8A3G6ns2K
-df = transform_to_dataframe(WALLET, txs)
-if not df.empty:
-    save_to_database(df, DATABASE_URL, TABLE_NAME)
+process_txs_from_sig(WALLET)
+# df = transform_to_dataframe(WALLET, txs)
+# if not df.empty:
+#     save_to_database(df, DATABASE_URL, TABLE_NAME)
 
 exit()
 
