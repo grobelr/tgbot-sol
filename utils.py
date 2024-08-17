@@ -115,7 +115,7 @@ def fetch_and_save_signatures(
 
         # Filter and append signatures
         for item in result:
-            if 'err' in item and 'InstructionError' in str(item['err']):
+            if'err' in item and ('InstructionError' in str(item['err']) or 'InsufficientFundsForRent' in str(item['err'])):
                 item['succeed'] = False
                 item['err'] = json.dumps(item['err'])
             else:
