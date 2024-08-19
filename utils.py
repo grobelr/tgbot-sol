@@ -5,7 +5,7 @@ import json
 import time
 from db import *
 from decode_tx import *
-
+import matplotlib.pyplot as plt
 
 def last_signature(wallet_address):
     return get_last_signature(wallet_address)
@@ -26,7 +26,11 @@ def process_txs_from_sig(wallet_address, max_retries=3, retry_delay=5):
                     tx_details = fetch_transaction_details(sig.signature)
                     if tx_details:
                         simplified_tx = identify_transaction_type(tx_details)
-                        save_tx_detail(wallet_address, simplified_tx)
+                        if simplified_tx:
+                            save_tx_detail(wallet_address, simplified_tx)
+                            update_signature_with_data(sig.signature, tx_details)
+                        else:
+                            update_signature_with_data(sig.signature, tx_details)
                         success = True  # Mark success if everything went well
                     else:
                         print(f"Failed to fetch transaction details for signature: {sig.signature}")
@@ -334,42 +338,37 @@ def determine_transaction_action(row):
         row['action'] = 'sell'
     return row
 
-# Update Columns for Solana Spend and Receive Function
-def update_sol_spent_received(expanded_df):
-    # Ensure tokenAmount_1 and tokenAmount_2 are cast to float
-    expanded_df['tokenAmount_1'] = expanded_df['tokenAmount_1'].astype(float)
-    expanded_df['tokenAmount_2'] = expanded_df['tokenAmount_2'].astype(float)
-    expanded_df['sol_spent'] = 0.0
-    expanded_df['sol_received'] = 0.0
+def update_sol_spent_received(df):
+# Iterate over each row and update the sol_spent and sol_received columns
+    df['sol_spent'] = 0.0
+    df['sol_received'] = 0.0
 
-    for i in range(len(expanded_df)):
-        row = expanded_df.iloc[i]
-        mint_2 = row['mint_2']
-        mint_1 = row['mint_1']
-        tokenAmount_1 = row['tokenAmount_1']
-        tokenAmount_2 = row['tokenAmount_2']
+    for i in range(len(df)):
+        row = df.iloc[i]
+        typeop = row['typeop']
+        mint = row['mint']
+        source_amount = row['source_amount']
 
-        # Update sol_spent
-        if mint_2 != 'So11111111111111111111111111111111111111112':
-            previous_rows = expanded_df[(expanded_df['mint_2'] == mint_2) & (expanded_df.index < i)]
+        # Update sol_spent when typeop == 'BUY'
+        if typeop == 'BUY':
+            previous_rows = df[(df['typeop'] == 'BUY') & (df['mint'] == mint) & (df.index < i)]
             if not previous_rows.empty:
                 last_row_index = previous_rows.index[-1]
-                sol_spent_previous = expanded_df.at[last_row_index, 'sol_spent']
-                print(sol_spent_previous, tokenAmount_1)
-                expanded_df.at[i, 'sol_spent'] = sol_spent_previous + tokenAmount_1
+                sol_spent_previous = df.at[last_row_index, 'sol_spent']
+                df.at[i, 'sol_spent'] = sol_spent_previous + source_amount
             else:
-                expanded_df.at[i, 'sol_spent'] = tokenAmount_1
+                df.at[i, 'sol_spent'] = source_amount
 
-        # Update sol_received
-        if mint_1 != 'So11111111111111111111111111111111111111112':
-            previous_rows = expanded_df[(expanded_df['mint_1'] == mint_1) & (expanded_df.index < i)]
+        # Update sol_received when typeop == 'SELL'
+        if typeop == 'SELL':
+            previous_rows = df[(df['typeop'] == 'SELL') & (df['mint'] == mint) & (df.index < i)]
             if not previous_rows.empty:
                 last_row_index = previous_rows.index[-1]
-                sol_received_previous = expanded_df.at[last_row_index, 'sol_received']
-                expanded_df.at[i, 'sol_received'] = sol_received_previous + tokenAmount_2
+                sol_received_previous = df.at[last_row_index, 'sol_received']
+                df.at[i, 'sol_received'] = sol_received_previous + source_amount
             else:
-                expanded_df.at[i, 'sol_received'] = tokenAmount_2
-    return expanded_df
+                df.at[i, 'sol_received'] = source_amount
+    return df
 
 # Create Token and Trade Size Columns Function
 def create_token_trade_size(expanded_df):
@@ -384,36 +383,39 @@ def create_token_trade_size(expanded_df):
     )
     return expanded_df
 
-# Calculate Previous and New Amount Function
-def calculate_amounts(expanded_df):
-    expanded_df['previous amount'] = 0.0
-    expanded_df['new amount'] = 0.0
+def calculate_amounts(df):
 
-    for i in range(len(expanded_df)):
-        row = expanded_df.iloc[i]
-        token = row['token']
-        trade_size = row['trade_size']
+    # Initialize the previous amount and new amount columns
+    df['previous amount'] = 0.0
+    df['new amount'] = 0.0
 
-        # Find the previous row with the same token
-        previous_rows = expanded_df[(expanded_df['token'] == token) & (expanded_df.index < i)]
+    # Iterate over each row and update the previous amount and new amount columns
+    for i in range(len(df)):
+        row = df.iloc[i]
+        mint = row['mint']
+        token_amount = row['token_amount']
+
+        # Find the previous row with the same mint
+        previous_rows = df[(df['mint'] == mint) & (df.index < i)]
         if not previous_rows.empty:
             last_row_index = previous_rows.index[-1]
-            previous_amount = expanded_df.at[last_row_index, 'new amount']
+            previous_amount = df.at[last_row_index, 'new amount']
         else:
             previous_amount = 0.0
 
         # Set the previous amount
-        expanded_df.at[i, 'previous amount'] = previous_amount
+        df.at[i, 'previous amount'] = previous_amount
 
         # Calculate the new amount
-        if row['action'] == 'buy':
-            new_amount = previous_amount + trade_size
-        elif row['action'] == 'sell':
-            new_amount = previous_amount - trade_size
+        if row['typeop'] == 'BUY':
+            new_amount = previous_amount + token_amount
+        elif row['typeop'] == 'SELL':
+            new_amount = previous_amount - token_amount
 
         # Set the new amount
-        expanded_df.at[i, 'new amount'] = new_amount
-    return expanded_df
+        df.at[i, 'new amount'] = new_amount
+
+    return df
 
 # Calculate Trade Price Function
 def calculate_trade_price(expanded_df):
@@ -421,31 +423,6 @@ def calculate_trade_price(expanded_df):
         lambda row: row['tokenAmount_1'] / row['tokenAmount_2'] if row['action'] == 'buy' else row['tokenAmount_2'] / row['tokenAmount_1'],
         axis=1
     )
-    return expanded_df
-
-def calculate_final_pnl(expanded_df):
-    expanded_df['final_pnl %'] = 0.0
-    expanded_df['final_pnl'] = 0.0
-
-    threshold = 1e-9
-
-    for i in range(len(expanded_df)):
-        row = expanded_df.iloc[i]
-        token = row['token']
-        action = row['action']
-        new_amount = row['new amount']
-        print(token, action, new_amount)
-        if action == 'sell' and np.isclose(new_amount, 0, atol=threshold):
-            previous_rows = expanded_df[(expanded_df['token'] == token) & (expanded_df['action'] == 'buy') & (expanded_df.index < i)]
-            if not previous_rows.empty:  # Corrected here
-                last_row_index = previous_rows.index[-1]
-                sol_spent_previous = expanded_df.at[last_row_index, 'sol_spent']
-                sol_received_current = row['sol_received']
-                if sol_spent_previous != 0:
-                    final_pnl_percentage = (sol_received_current / sol_spent_previous - 1) * 100
-                    final_pnl = sol_received_current - sol_spent_previous
-                    expanded_df.at[i, 'final_pnl %'] = round(final_pnl_percentage, 5)
-                    expanded_df.at[i, 'final_pnl'] = round(final_pnl, 5)
     return expanded_df
 
 # Calculate Accumulated PnL Function
@@ -467,3 +444,197 @@ def filter_pnl_dataframe(expanded_df):
     expanded_df['final_pnl'] = expanded_df['final_pnl'].astype(float)
     pnl_df = expanded_df[expanded_df['final_pnl'] != 0].reset_index(drop=True)
     return pnl_df
+
+def calculate_final_pnl(df):
+    # Calculate trade_price by dividing source_amount by token_amount
+    df['trade_price'] = (df['source_amount'] / df['token_amount']).round(6)
+
+    # Initialize the final_pnl columns
+    df['final_pnl %'] = 0.0
+    df['final_pnl'] = 0.0
+
+    # Define a small threshold for floating point comparison
+    threshold = 1e-9
+
+    for i in range(len(df)):
+        row = df.iloc[i]
+        mint = row['mint']
+        action = row['typeop']
+        new_amount = row['new amount']
+
+        # Check if action is 'SELL' and new amount is close to zero within the threshold
+        if action == 'SELL' and np.isclose(new_amount, 0, atol=threshold):
+            # Find the previous row with the same mint and action 'BUY'
+            previous_rows = df[(df['mint'] == mint) & (df['typeop'] == 'BUY') & (df.index < i)]
+            if not previous_rows.empty:
+                last_row_index = previous_rows.index[-1]
+                sol_spent_previous = df.at[last_row_index, 'sol_spent']
+                sol_received_current = row['sol_received']
+                if sol_spent_previous != 0:
+                    final_pnl_percentage = (sol_received_current / sol_spent_previous - 1) * 100  # Convert to percentage
+                    final_pnl = sol_received_current - sol_spent_previous  # Calculate absolute PnL
+                    df.at[i, 'final_pnl %'] = round(final_pnl_percentage, 5)
+                    df.at[i, 'final_pnl'] = round(final_pnl, 5)
+    return df
+
+def accu_pnl_df(df):
+    # Filter the DataFrame to only rows where 'final_pnl' is not zero and reset the index
+    df_pnl = df[df['final_pnl %'] != 0].reset_index(drop=True)
+
+    # Initialize the accumulated_pnl column
+    df_pnl['accumulated_pnl'] = 0.0
+
+    # Initialize the accumulated PnL
+    accumulated_pnl = 0.0
+
+    for i in range(len(df_pnl)):
+        row = df_pnl.iloc[i]
+        final_pnl = row['final_pnl']
+
+        # Accumulate the PnL
+        accumulated_pnl += final_pnl
+        df_pnl.at[i, 'accumulated_pnl'] = round(accumulated_pnl, 5)
+
+    return df_pnl
+
+def summarize_wallet_performance(df, chat_id=None):
+    # Step4: Calculate pnls
+    df = df.sort_values(by="timestamp").reset_index(drop=True)
+    df = update_sol_spent_received(df)
+    df = calculate_amounts(df)
+    df = calculate_final_pnl(df)
+    df_pnl = accu_pnl_df(df)
+
+    # Step 5: Filter the DataFrame for positive values on balance only (to avoid outliers)
+    filtered_df = df[(df['previous amount'] >= 0) & (df['new amount'] >= 0)]
+
+    # Step 6: Calculate the cumulative sums for sol_spent, sol_received, and fees
+    filtered_df['accumulated_sol_spent'] = filtered_df['sol_spent'].cumsum()
+    filtered_df['accumulated_sol_received'] = filtered_df['sol_received'].cumsum()
+    filtered_df['accumulated_fees'] = filtered_df['fee'].cumsum()
+
+    # Step 7: Get the last values of accumulated_sol_spent and accumulated_sol_received
+    total_sol_spent = filtered_df['accumulated_sol_spent'].iloc[-1].round(5)
+    total_sol_received = filtered_df['accumulated_sol_received'].iloc[-1].round(5)
+
+    # Step 8: Calculate the estimated PnL for trades not closed
+    estimated_pnl = (total_sol_received - total_sol_spent).round(5)
+
+    # Step 9: Fees calculation - Get the last value of accumulated_fees
+    total_fee_spent = (filtered_df['accumulated_fees'].iloc[-1] / 1000000000).round(5)
+    avg_fee = (total_fee_spent/df['mint'].nunique()).round(5)
+
+    # Find the first and last trades
+    first_trade_timestamp = filtered_df['timestamp'].iloc[0]
+    last_trade_timestamp = filtered_df['timestamp'].iloc[-1]
+
+    avg_trade_size = (filtered_df['accumulated_sol_spent'].iloc[-1]/filtered_df['mint'].nunique()).round(5)
+
+    # Step 1: Extract unique values from the 'mint' column in both DataFrames
+    unique_pnl_mints = set(df_pnl['mint'].dropna().unique())
+    unique_filtered_mints = set(filtered_df['mint'].dropna().unique())
+
+    # Step 2: Find mints that are in df_pnl but not in filtered_df
+    missing_in_filtered = unique_pnl_mints - unique_filtered_mints
+
+    # Step 3: Find mints that are in filtered_df but not in df_pnl
+    missing_in_pnl = unique_filtered_mints - unique_pnl_mints
+
+    # Calculate the number of unique values in the 'mint' column
+    tokens_traded = filtered_df['mint'].nunique() 
+    trades_closed = df_pnl['mint'].nunique()
+    trades_open = tokens_traded - trades_closed
+
+    # Basic statistics for final_pnl
+    mean_pnl = df_pnl['final_pnl'].mean()
+    median_pnl = df_pnl['final_pnl'].median()
+    std_pnl = df_pnl['final_pnl'].std()
+    min_pnl = df_pnl['final_pnl'].min()
+    max_pnl = df_pnl['final_pnl'].max()
+    percentiles_pnl = df_pnl['final_pnl'].quantile([0.1, 0.25, 0.5, 0.75, 0.9])
+    total_pnl = df_pnl['final_pnl'].sum()
+
+    # Basic statistics for final_pnl %
+    mean_pnl_percent = df_pnl['final_pnl %'].mean()
+    median_pnl_percent = df_pnl['final_pnl %'].median()
+    std_pnl_percent = df_pnl['final_pnl %'].std()
+    min_pnl_percent = df_pnl['final_pnl %'].min()
+    max_pnl_percent = df_pnl['final_pnl %'].max()
+    percentiles_pnl_percent = df_pnl['final_pnl %'].quantile([0.1, 0.25, 0.5, 0.75, 0.9])
+    total_pnl_percent = df_pnl['final_pnl %'].sum()
+
+    # Calc win rate
+    wins = (df_pnl['final_pnl'] > 0).sum()
+    losses = (df_pnl['final_pnl'] < 0).sum()
+    win_rate = wins / (losses + wins) * 100 
+
+    summary = {}
+
+    # General wallet performance
+    summary['general_performance'] = {
+        'first_trade_timestamp': first_trade_timestamp,
+        'last_trade_timestamp': last_trade_timestamp,
+        'tokens_traded': tokens_traded,
+        'trades_closed': trades_closed,
+        'trades_open': trades_open,
+        'total_sol_spent': total_sol_spent,
+        'total_sol_received': total_sol_received,
+        'net_sol': estimated_pnl,
+    }
+
+    # Individual closed trades stats
+    summary['closed_trades_overview'] = {
+        'winners': wins,
+        'losses': losses,
+        'win_rate_percent': win_rate,
+        'average_trade_size_sol': avg_trade_size,
+        'mean_pnl_sol': mean_pnl,
+        'mean_pnl_percent': mean_pnl_percent,
+        'std_pnl_sol': std_pnl,
+        'std_pnl_percent': std_pnl_percent,
+        'min_pnl_sol': min_pnl,
+        'min_pnl_percent': min_pnl_percent,
+        '25th_percentile_pnl_sol': percentiles_pnl[0.25],
+        '25th_percentile_pnl_percent': percentiles_pnl_percent[0.25],
+        '50th_percentile_pnl_sol': percentiles_pnl[0.5],
+        '50th_percentile_pnl_percent': percentiles_pnl_percent[0.5],
+        '75th_percentile_pnl_sol': percentiles_pnl[0.75],
+        '75th_percentile_pnl_percent': percentiles_pnl_percent[0.75],
+        'max_pnl_sol': max_pnl,
+        'max_pnl_percent': max_pnl_percent,
+        'total_pnl_sol': total_pnl,
+        'total_pnl_percent': total_pnl_percent,
+    }
+
+    # Fees
+    summary['fees'] = {
+        'total_fee_spent_sol': total_fee_spent,
+        'avg_fee_per_trade_sol': avg_fee,
+    }
+
+    ## matplot
+    # Convert timestamps to only date and hour
+    df_pnl['timestamp'] = pd.to_datetime(df_pnl['timestamp']).dt.strftime('%Y-%m-%d %H:00')
+
+    # Add an initial value of 0 for the accumulated PnL
+    initial_row = pd.DataFrame({'timestamp': [df_pnl['timestamp'].min()], 'accumulated_pnl': [0]})
+    df_pnl = pd.concat([initial_row, df_pnl], ignore_index=True)
+
+    # Plot the accumulated PnL over time
+    plt.figure(figsize=(14, 8))
+
+    # Plot cumulative PnL
+    plt.subplot(2, 1, 1)
+    plt.plot(df_pnl['timestamp'], df_pnl['accumulated_pnl'], marker='o', linestyle='-', color='b')
+    plt.xlabel('Time')
+    plt.ylabel('Accumulated PnL')
+    plt.title('Accumulated PnL Over Time')
+    plt.xticks(ticks=df_pnl['timestamp'][:], rotation=45, fontsize=8)  
+    plt.grid()
+    # Save the plot to a file
+    plt.tight_layout()  # Adjusts the layout to make sure everything fits without overlapping
+    filename = f"imgs/{int(time.time())}_{chat_id}.png"
+    plt.savefig(filename, format='png')  # You can change the format to 'jpeg', 'pdf', etc.
+    plt.close()  # Close the plot to free memory
+    summary['graph_filename'] = filename
+    return summary

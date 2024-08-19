@@ -3,3 +3,10 @@
 transactions.db
 helius_txs.db
 __pycache__
+
+
+# Ignore all files inside the directory
+imgs/*
+
+# But don't ignore the directory itself
+!imgs/

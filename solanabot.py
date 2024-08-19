@@ -31,14 +31,58 @@ async def send_wallet_info(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send wallet info"""
     job = context.job
     await context.bot.send_message(job.chat_id, text=f"Wait a moment.. Generating stats")
-    # Get the last signature from the database
-    last_signature = get_last_signature(job.data)
-    # fetch latest transactions and save to DB.
-    fetch_transactions(job.data, HELIUS_API, last_signature)
+    
+    # Load the transactions into a dataframe
+    df = load_transactions_to_dataframe(job.data)
+    
+    # Generate the wallet summary
+    wallet_summary = summarize_wallet_performance(df, job.chat_id)
+    
+    # Prepare the message with all the information
+    message = f"""
+🚀 *Wallet Performance Summary* 🚀
 
-    # fetch all txs from db
-    txs = select_from_db(job.data)
-    await context.bot.send_message(job.chat_id, text=f"Number of transactions filtered: {len(txs)}")
+🗓 *First Trade:* {wallet_summary['general_performance']['first_trade_timestamp']}
+🗓 *Last Trade:* {wallet_summary['general_performance']['last_trade_timestamp']}
+💼 *Unique Tokens Traded:* {wallet_summary['general_performance']['tokens_traded']}
+📈 *Trades Closed:* {wallet_summary['general_performance']['trades_closed']}
+📉 *Trades Open:* {wallet_summary['general_performance']['trades_open']}
+
+💰 *Total SOL Spent (Buys):* {wallet_summary['general_performance']['total_sol_spent']:.6f}
+💸 *Total SOL Received (Sells):* {wallet_summary['general_performance']['total_sol_received']:.6f}
+📊 *Net SOL:* {wallet_summary['general_performance']['net_sol']:.6f}
+
+ *Closed Trades Overview:*
+✅ *Winners:* {wallet_summary['closed_trades_overview']['winners']}
+❌ *Losses:* {wallet_summary['closed_trades_overview']['losses']}
+🏆 *Win Rate:* {wallet_summary['closed_trades_overview']['win_rate_percent']:.2f}%
+📏 *Average Trade Size (SOL):* {wallet_summary['closed_trades_overview']['average_trade_size_sol']:.4f}
+🔄 *Mean PnL:* {wallet_summary['closed_trades_overview']['mean_pnl_sol']:.4f} SOL ({wallet_summary['closed_trades_overview']['mean_pnl_percent']:.2f}%)
+📉 *Min PnL:* {wallet_summary['closed_trades_overview']['min_pnl_sol']:.4f} SOL ({wallet_summary['closed_trades_overview']['min_pnl_percent']:.2f}%)
+📈 *Max PnL:* {wallet_summary['closed_trades_overview']['max_pnl_sol']:.4f} SOL ({wallet_summary['closed_trades_overview']['max_pnl_percent']:.2f}%)
+
+🎯 *Percentiles of PnL:*
+25th: {wallet_summary['closed_trades_overview']['25th_percentile_pnl_sol']:.4f} SOL ({wallet_summary['closed_trades_overview']['25th_percentile_pnl_percent']:.2f}%)
+50th (Median): {wallet_summary['closed_trades_overview']['50th_percentile_pnl_sol']:.4f} SOL ({wallet_summary['closed_trades_overview']['50th_percentile_pnl_percent']:.2f}%)
+75th: {wallet_summary['closed_trades_overview']['75th_percentile_pnl_sol']:.4f} SOL ({wallet_summary['closed_trades_overview']['75th_percentile_pnl_percent']:.2f}%)
+
+📊 *Total PnL:* {wallet_summary['closed_trades_overview']['total_pnl_sol']:.4f} SOL ({wallet_summary['closed_trades_overview']['total_pnl_percent']:.2f}%)
+
+💸 *Fees Overview:*
+💰 *Total SOL Spent on Fees:* {wallet_summary['fees']['total_fee_spent_sol']:.6f} SOL
+💵 *Average Fee per Trade:* {wallet_summary['fees']['avg_fee_per_trade_sol']:.6f} SOL
+    """
+    
+    # Send the prepared message
+    await context.bot.send_message(
+        chat_id=job.chat_id, 
+        text=message,
+        parse_mode='Markdown'
+    )
+    # Send the plot image
+    with open(f'imgs/{wallet_summary['graph_filename']}', 'rb') as photo:
+        await context.bot.send_photo(chat_id=job.chat_id, photo=photo)
+
 
 def remove_job_if_exists(name: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Remove job with given name. Returns whether job was removed."""

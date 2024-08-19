@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, aliased
 from dotenv import load_dotenv
 import os
+import json
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,6 +22,12 @@ class Signature(Base):
     slot = Column(Integer, nullable=False)
     err = Column(String)
     succeed = Column(Boolean, nullable=False)
+    data = Column(Text, nullable=True, default=None)
+
+    def __repr__(self):
+        return (f"<Signature(id={self.id}, wallet_address='{self.wallet_address}', signature='{self.signature}', "
+                f"blockTime={self.blockTime}, slot={self.slot}, succeed={self.succeed}, "
+                f"data={self.data})>")
 
 class Transaction(Base):
     __tablename__ = 'transactions'
@@ -90,20 +97,15 @@ def get_last_signature(wallet_address):
 def return_not_processed_sigs(wallet_address):
     session = Session()
     try:
-        # Create an alias for the Transaction table
-        tx_alias = aliased(Transaction)
-
-        # Step 1: Select signatures that have succeeded and do not have a corresponding entry in the Transaction table
-        sigs = session.query(Signature).outerjoin(
-            tx_alias, Signature.signature == tx_alias.signature
-        ).filter(
+        # Select signatures that have succeeded and do not have data
+        sigs = session.query(Signature).filter(
             Signature.wallet_address == wallet_address,
             Signature.succeed == True,
-            tx_alias.signature == None  # Filter for signatures not in the Transaction table
+            Signature.data.is_(None)  # Only fetch signatures where data is NULL
         ).all()
         return sigs
     except Exception as e:
-        print(f"An error occurred while processing transactions: {e}")
+        print(f"An error occurred while fetching not processed signatures: {e}")
     finally:
         session.close()
 
@@ -130,7 +132,6 @@ def save_tx_detail(wallet_address, simplified_tx):
             
             # Add the transaction to the session
             session.add(new_transaction)
-        
         # Commit the session to save all transactions
         session.commit()
 
@@ -146,4 +147,23 @@ def fetch_transactions(wallet_address):
     # Query the transactions for the given wallet address
     transactions = session.query(Transaction).filter_by(wallet_address=wallet_address).all()
     return transactions
+
+def update_signature_with_data(signature, data):
+    session = Session()
+    try:
+        # Fetch the corresponding signature record
+        signature_record = session.query(Signature).filter_by(signature=signature).first()
+
+        if signature_record:
+            # Update the data field with the fetched details
+            signature_record.data = json.dumps(data)  # Store the details as JSON
+            session.commit()
+        else:
+            print(f"Signature {signature} not found.")
+    except Exception as e:
+        print(f"Error updating signature: {e}")
+        session.rollback()
+    finally:
+        # Close the session
+        session.close()
 

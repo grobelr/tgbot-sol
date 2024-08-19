@@ -23,7 +23,6 @@ def identify_transaction_type(tx_details):
                 # user_destination_account = instruction.get('accounts')[16]
                 raw_data = base58.b58decode(instruction.get('data'))
                 # amount_in = int.from_bytes(raw_data[1:9], "0")
-                print('===> raydium data:', raw_data[0])
                 if raw_data[0] == 9:
                     source = 'RAYDIUM'
                     typetx = 'SWAP/ROUTE'
@@ -54,6 +53,8 @@ def identify_transaction_type(tx_details):
                         'source_amount': source_amount,
                         'token_amount': token_amount,
                     })
+                else:
+                    print('===> raydium data:', raw_data[0])
             ## JUPITER / PUMPFUN
             else:
                 continue
