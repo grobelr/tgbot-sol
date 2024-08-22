@@ -6,56 +6,184 @@ import time
 from db import *
 from decode_tx import *
 import matplotlib.pyplot as plt
+import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
-def last_signature(wallet_address):
-    return get_last_signature(wallet_address)
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
-def process_txs_from_sig(wallet_address, max_retries=3, retry_delay=5):
-    sigs = return_not_processed_sigs(wallet_address)
-    total_sigs = len(sigs)
-    next_milestone = 1
-    print(f"Processing {total_sigs} transactions for wallet: {wallet_address}")
-    
+async def fetch_tx(sig, rpc_url, timesleep, coro_id):
     try:
-        for idx, sig in enumerate(sigs):
-            retries = 0
-            success = False
-            while retries < max_retries and not success:
-                try:
-                    # Fetch transaction details
-                    tx_details = fetch_transaction_details(sig.signature)
-                    if tx_details:
-                        simplified_tx = identify_transaction_type(tx_details)
-                        if simplified_tx:
-                            save_tx_detail(wallet_address, simplified_tx)
-                            update_signature_with_data(sig.signature, tx_details)
-                        else:
-                            update_signature_with_data(sig.signature, tx_details)
-                        success = True  # Mark success if everything went well
-                    else:
-                        print(f"Failed to fetch transaction details for signature: {sig.signature}")
-                except Exception as fetch_error:
-                    print(f"Error fetching transaction details for signature: {sig.signature}, retrying... {retries+1}/{max_retries}")
-                    retries += 1
-                    time.sleep(retry_delay)
-                
-                if not success and retries == max_retries:
-                    print(f"Max retries reached for signature: {sig.signature}. Skipping...")
-
-                # Delay between processing transactions
-                time.sleep(retry_delay)
-
-            # Calculate progress percentage
-            progress = ((idx + 1) / total_sigs) * 100
-
-            # Print progress at milestones (10%, 20%, ..., 100%)
-            if progress >= next_milestone:
-                print(f"Progress: {progress:.2f}% ({idx + 1}/{total_sigs})")
-                next_milestone += 10  # Move to the next milestone
-
+        tx_details = await asyncio.to_thread(fetch_transaction_details, sig.signature, rpc_url)
+        if tx_details and tx_details.get('result') is not None:
+            await asyncio.to_thread(update_signature_with_data, sig.signature, tx_details)
+        else:
+            logging.info(f"[Coroutine {coro_id}] Failed to fetch transaction details for signature: {sig.signature}")
     except Exception as e:
-        print(f"An error occurred while processing transactions: {e} (Signature: {sig.signature})")
+        logging.info(f"[Coroutine {coro_id}] Error fetching transaction details for signature: {sig.signature}: {e}")
+    finally:
+        await asyncio.sleep(timesleep)  # Delay between processing transactions
 
+async def fetch_txs_from_sigs(wallet_address, max_retries=5, retry_delay=5, rpc_url="https://api.mainnet-beta.solana.com", timesleep=4):
+    sigs = fetch_incompleted_signatures(wallet_address)
+    total_sigs = len(sigs)
+    if total_sigs == 0:
+        logging.info(f"Nothing new for wallet: {wallet_address}")
+        return
+
+    next_milestone = 1
+    logging.info(f"Processing {len(sigs)} txs for wallet: {wallet_address}")
+
+    tasks = []
+    for idx, sig in enumerate(sigs):
+        task = fetch_tx(sig, rpc_url, timesleep, idx + 1)
+        tasks.append(task)
+    
+    # Run all tasks concurrently
+    await asyncio.gather(*tasks)
+
+    # Print progress at milestones (10%, 20%, ..., 100%)
+    progress = ((idx + 1) / total_sigs) * 100
+    if progress >= next_milestone:
+        logging.info(f"Progress: {progress:.2f}% ({idx + 1}/{total_sigs})")
+        next_milestone += 10  # Move to the next milestone
+
+# def fetch_txs_from_sigs(
+#         wallet_address, 
+#         max_retries=5, 
+#         retry_delay=5,
+#         rpc_url="https://api.mainnet-beta.solana.com",
+#         timesleep=4
+#         ):
+#     sigs = fetch_incompleted_signatures(wallet_address)
+#     total_sigs = len(sigs)
+#     next_milestone = 1
+#     logging.info(f"Processing {len(sigs)} txs from total {total_sigs} txs for wallet: {wallet_address}")
+#     try:
+#         for idx, sig in enumerate(sigs):
+#             retries = 0
+#             success = False
+#             while retries < max_retries and not success:
+#                 try:
+#                     # Fetch transaction details
+#                     tx_details = fetch_transaction_details(sig.signature, rpc_url)
+#                     if tx_details and tx_details.get('result') is not None:
+#                         update_signature_with_data(sig.signature, tx_details)
+#                         success = True  # Mark success if everything went well
+#                     else:
+#                         logging.info(f"Failed to fetch transaction details for signature: {sig.signature}")
+#                 except Exception as e:
+#                     logging.info(f"Error fetching transaction {e} details for signature: {sig.signature}, retrying... {retries+1}/{max_retries}")
+#                     retries += 1
+#                     time.sleep(retry_delay)
+                
+#                 if not success and retries == max_retries:
+#                     logging.info(f"Max retries reached for signature: {sig.signature}. Skipping...")
+
+#                 # Delay between processing transactions
+#                 time.sleep(timesleep)
+
+#             # Calculate progress percentage
+#             progress = ((idx + 1) / total_sigs) * 100
+
+#             # Print progress at milestones (10%, 20%, ..., 100%)
+#             if progress >= next_milestone:
+#                 logging.info(f"Progress: {progress:.2f}% ({idx + 1}/{total_sigs})")
+#                 next_milestone += 10  # Move to the next milestone
+
+#     except Exception as e:
+#         logging.error(f"An error occurred while processing transactions: {e} (Signature: {sig.signature})")
+
+def save_all_token_accounts(wallet_address):
+    try:
+        sigs = fetch_unprocessed_token_account_signatures(wallet_address)
+        for sig in sigs:
+            try:
+                # Deserialize the JSON string into a dictionary
+                tx_details = json.loads(sig.data)
+
+                if not isinstance(tx_details, dict):
+                    raise ValueError(f"tx_details is not a dictionary after deserialization: {type(tx_details)}")
+                if 'result' not in tx_details or not isinstance(tx_details['result'], dict):
+                    raise ValueError(f"tx_details['result'] is missing or not a dictionary: {tx_details}")
+                update_signature_with_processed(sig.signature, processed=True)
+                token_accounts = extract_token_account_details(tx_details)
+                if token_accounts == []:
+                    continue
+                for account in token_accounts:
+                    try:
+                        save_token_account_create(account, sig.signature)
+                    except Exception as e:
+                        logging.error(f"Error saving token account {account}: {e}")
+            except json.JSONDecodeError as e:
+                logging.error(f"Error decoding JSON for signature {sig.signature}: {e}")
+            except Exception as e:
+                logging.error(f"Error processing signature {sig.signature}: {e}")
+    except Exception as e:
+        logging.error(f"Error fetching token accounts: {e}")
+
+def process_txs(wallet_address):
+    try:
+        sigs = fetch_processed_signatures_not_in_transactions(wallet_address)
+        logging.info(f"Fetched {len(sigs)} signatures to process for wallet: {wallet_address}")
+        
+        for sig in sigs:
+            try:
+                tx_details = sig.data
+                
+                # Debug: Log the type and content of tx_details
+                logging.debug(f"tx_details type: {type(tx_details)}")
+                logging.debug(f"tx_details content: {tx_details}")
+                
+                # If tx_details is a string, parse it as JSON
+                if isinstance(tx_details, str):
+                    try:
+                        tx_details = json.loads(tx_details)
+                        logging.debug("tx_details successfully parsed from JSON string.")
+                    except json.JSONDecodeError as e:
+                        logging.error(f"JSON decoding failed for signature {sig.signature}: {e}")
+                        continue  # Skip this iteration
+                
+                # Proceed only if tx_details is a dictionary
+                if not isinstance(tx_details, dict):
+                    logging.error(f"tx_details has unexpected type for signature {sig.signature}: {type(tx_details)}")
+                    continue  # Skip this iteration
+
+                # Now attempt to identify the transaction type
+                simplified_tx = identify_transaction_type(tx_details)
+                
+                if simplified_tx:
+                    # logging.info(f"simplified_tx: {simplified_tx}")
+                    save_tx_detail(wallet_address, simplified_tx)
+                else:
+                    logging.warning(f"Could not identify transaction type for signature: {sig.signature}")
+            
+            except Exception as e:
+                logging.error(f"Exception occurred while processing signature {sig.signature}: {e}")
+                logging.debug("Traceback:", exc_info=True)
+                
+    except Exception as e:
+        logging.error(f"Exception occurred in process_txs: {e}")
+        logging.debug("Traceback:", exc_info=True)
+
+def process_txs_from_sig(
+        wallet_address,
+        rpc_url="https://api.mainnet-beta.solana.com",
+        timesleep=4
+        ):
+    logging.info("Fetching transactions...")
+
+    # Run the asynchronous fetch_txs_from_sigs
+    # asyncio.create_task(fetch_txs_from_sigs(wallet_address, rpc_url=rpc_url, timesleep=timesleep))
+
+    asyncio.run(fetch_txs_from_sigs(wallet_address, rpc_url=rpc_url, timesleep=timesleep))
+
+    logging.info("Processing Token Accounts...")
+    save_all_token_accounts(wallet_address)
+    logging.info("Processing the Swaps...")
+    process_txs(wallet_address)
 
 def fetch_transaction_details(signature, rpc_url="https://api.mainnet-beta.solana.com"):
     # Create the request payload
@@ -79,7 +207,7 @@ def fetch_transaction_details(signature, rpc_url="https://api.mainnet-beta.solan
 
     # Check for errors
     if 'error' in data:
-        print("Error fetching transaction details:", data['error'])
+        logging.error("Error fetching transaction details:", data['error'])
         return None
     return data
 
@@ -87,7 +215,8 @@ def fetch_and_save_signatures(
         address, 
         rpc_url="https://api.mainnet-beta.solana.com", 
         last_signature=None, 
-        limit=1000):
+        limit=1000,
+        timesleep=4):
     signatures = []
 
     while True:
@@ -108,13 +237,13 @@ def fetch_and_save_signatures(
         data = response.json()
 
         if 'error' in data:
-            print("Error fetching signatures:", data['error'])
+            logging.error("Error fetching signatures:", data['error'])
             break
 
         # Extract signatures from the result
         result = data.get('result', [])
         if not result:
-            print("No more signatures to fetch.")
+            logging.info("No more signatures to fetch.")
             break
 
         # Filter and append signatures
@@ -131,34 +260,12 @@ def fetch_and_save_signatures(
         # Update the last_signature to continue fetching
         last_signature = result[-1]['signature']
 
-        print(f"Fetched {len(result)} signatures, total after filtering: {len(signatures)}")
-        time.sleep(4)
+        logging.info(f"Fetched {len(result)} signatures, total after filtering: {len(signatures)}")
+        time.sleep(timesleep)
         
         # If less than the limit is returned, we have reached the end
         if len(result) < limit:
             break
-
-def select_from_db(wallet_address):
-    # Initialize the database and create a session
-    engine = create_engine(DATABASE_URL)
-    Session = sessionmaker(bind=engine)
-    session = Session()
-
-    try:
-        # Query the database for transactions associated with the given wallet_address
-        transactions = session.query(Transaction).filter_by(wallet_address=wallet_address).all()
-
-        # Extract the JSON data from each transaction
-        txs = [json.loads(tx.data) for tx in transactions]
-        return txs
-
-    except Exception as e:
-        print(f"Error fetching transactions from the database: {e}")
-        return None
-
-    finally:
-        # Close the session
-        session.close()
 
 def load_transactions_to_dataframe(wallet_address):
     txs = fetch_transactions(wallet_address)
@@ -245,12 +352,12 @@ def transform_to_dataframe(wallet_address, transactions):
         else:
             continue
         if len(mints) > 1:
-            print(f"Alert: Multiple different mints found in transaction {tx.get('signature', '')}: {mints}")
+            logging.info(f"Alert: Multiple different mints found in transaction {tx.get('signature', '')}: {mints}")
         
         mint_value = mints.pop() if mints else None
 
         if source.upper() in ['PUMPFUN', 'JUPITER', 'RAYDIUM']:
-            print(source)
+            logging.info(source)
             data.append({
                 'wallet': tx.get('feePayer', ''),
                 'mint': mint_value,
@@ -288,7 +395,7 @@ def save_transaction_to_db(session, wallet_address, transaction_data):
         session.commit()
     except Exception as e:
         session.rollback()
-        print(f"Failed to save transaction {signature}: {e}")
+        logging.error(f"Failed to save transaction {signature}: {e}")
 
 def save_to_database(df, database_url, table_name):
     engine = (database_url)
@@ -308,7 +415,7 @@ def generate_and_print_df(database_url, table_name):
     pd.set_option('display.expand_frame_repr', False)  # Disable wrapping to new lines
 
     # Print the entire DataFrame
-    print(df_from_db)
+    logging.info(df_from_db)
 
 def generate_dt(database_url, table_name):
     engine = create_engine(database_url)

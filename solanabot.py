@@ -11,7 +11,7 @@ import os
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
 # Load environment variables from .env file
@@ -22,6 +22,14 @@ HELIUS_API = os.getenv('HELIUS_API')
 DATABASE_URL = os.getenv('DATABASE_URL')
 TABLE_NAME = os.getenv('TABLE_NAME')
 BOT_API = os.getenv('BOT_API')
+RPC_URL = os.getenv('RPC_URL')
+
+if RPC_URL:
+    rpc_url = RPC_URL
+else:
+    rpc_url = 'https://api.mainnet-beta.solana.com'
+
+timesleep = 0.2
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Hi! Use /wallet <address> to fetch wallet information")
@@ -33,9 +41,17 @@ async def send_wallet_info(context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(job.chat_id, text=f"Wait a moment.. Generating stats")
     
     # Load the transactions into a dataframe
+    last_signature = get_last_signature(job.data)
+    logging.info(f"Fetch sig for {job.data}")
+    
+    fetch_and_save_signatures(address=job.data, last_signature=last_signature, rpc_url=RPC_URL, timesleep=timesleep)
+    # Step 2: Process all txs
+    logging.info(f"process txs {job.data}")
+    process_txs_from_sig(wallet_address=job.data, rpc_url=rpc_url, timesleep=timesleep)
     df = load_transactions_to_dataframe(job.data)
     
     # Generate the wallet summary
+    logging.info(f"Summarize {job.data}")
     wallet_summary = summarize_wallet_performance(df, job.chat_id)
     
     # Prepare the message with all the information
@@ -80,9 +96,8 @@ async def send_wallet_info(context: ContextTypes.DEFAULT_TYPE) -> None:
         parse_mode='Markdown'
     )
     # Send the plot image
-    with open(f'imgs/{wallet_summary['graph_filename']}', 'rb') as photo:
+    with open(f"imgs/{wallet_summary['graph_filename']}", 'rb') as photo:
         await context.bot.send_photo(chat_id=job.chat_id, photo=photo)
-
 
 def remove_job_if_exists(name: str, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Remove job with given name. Returns whether job was removed."""

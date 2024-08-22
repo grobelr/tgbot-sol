@@ -1,12 +1,21 @@
-from sqlalchemy import create_engine, Column, Integer, Text, Float, String, Boolean, inspect, text
+from sqlalchemy import create_engine, Column, Integer, Text, Float, String, Boolean, inspect, text, func, select
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, aliased
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.pool import NullPool
+
 from dotenv import load_dotenv
 import os
 import json
+import logging
 
 # Load environment variables from .env file
 load_dotenv()
+
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logging.getLogger('sqlalchemy.pool').setLevel(logging.INFO)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -23,11 +32,12 @@ class Signature(Base):
     err = Column(String)
     succeed = Column(Boolean, nullable=False)
     data = Column(Text, nullable=True, default=None)
+    processed = Column(Boolean, default=False)
 
     def __repr__(self):
         return (f"<Signature(id={self.id}, wallet_address='{self.wallet_address}', signature='{self.signature}', "
                 f"blockTime={self.blockTime}, slot={self.slot}, succeed={self.succeed}, "
-                f"data={self.data})>")
+                f"data={self.data})>, processed={self.processed})>")
 
 class Transaction(Base):
     __tablename__ = 'transactions'
@@ -45,8 +55,26 @@ class Transaction(Base):
     source_amount = Column(Float, nullable=True)
     token_amount = Column(Float, nullable=True)
 
+class TokenAccount(Base):
+    __tablename__ = 'token_account'
+
+    token_account = Column(String, primary_key=True, nullable=False)
+    wallet_address = Column(String, nullable=False)
+    mint = Column(String, nullable=True)
+    signature = Column(String, nullable=False)
+
+    def __repr__(self):
+        return (f"<TokenAccount(token_account='{self.token_account}', wallet_address='{self.wallet_address}', "
+                f"mint='{self.mint} signature='{self.signature}')>")
+
+    
 # Initialize the database
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+   DATABASE_URL,
+    # pool_size=10,
+    # max_overflow=20,
+    poolclass=NullPool,
+)
 Base.metadata.create_all(engine)
 
 # Create a session
@@ -94,24 +122,61 @@ def get_last_signature(wallet_address):
         # Close the session
         session.close()
 
-def return_not_processed_sigs(wallet_address):
+def fetch_incompleted_signatures(wallet_address):
     session = Session()
     try:
-        # Select signatures that have succeeded and do not have data
+        # Select signatures that have succeeded and do not have data, ordered by blockTime
         sigs = session.query(Signature).filter(
             Signature.wallet_address == wallet_address,
-            Signature.succeed == True,
-            Signature.data.is_(None)  # Only fetch signatures where data is NULL
-        ).all()
+            Signature.succeed == True
+        ).filter(
+            func.json_extract(Signature.data, '$.result').is_(None)
+        ).order_by(Signature.blockTime.asc()).all()
+
         return sigs
     except Exception as e:
         print(f"An error occurred while fetching not processed signatures: {e}")
     finally:
         session.close()
 
+def fetch_unprocessed_token_account_signatures(wallet_address):
+    session = Session()
+    try:
+        subquery = select(TokenAccount.signature)
+        sigs = session.query(Signature).filter(
+            Signature.wallet_address == wallet_address,
+            Signature.succeed == True,
+            Signature.processed == False,
+            Signature.signature.notin_(subquery)
+        ).order_by(Signature.blockTime.asc()).all()
+        return sigs
+    except Exception as e:
+        print(f"An error occurred while fetching not processed signatures: {e}")
+    finally:
+        session.close()
+
+def fetch_processed_signatures_not_in_transactions(wallet_address):
+    session = Session()
+    try:
+        # Create a subquery to find signatures already in the Transaction table
+        subquery = select(Transaction.signature)
+
+        # Select signatures that have succeeded, are processed, and are not in the Transaction table
+        sigs = session.query(Signature).filter(
+            Signature.wallet_address == wallet_address,
+            Signature.succeed == True,
+            Signature.processed == True,  # Looking for processed signatures
+            Signature.signature.notin_(subquery)  # Exclude signatures already in Transaction
+        ).order_by(Signature.blockTime.asc()).all()  # Order by blockTime in ascending order
+
+        return sigs
+    except Exception as e:
+        print(f"An error occurred while fetching processed signatures: {e}")
+    finally:
+        session.close()
+
 def save_tx_detail(wallet_address, simplified_tx):
     session = Session()
-
     try:
         # Iterate over the list of simplified transactions
         for tx in simplified_tx:
@@ -142,11 +207,51 @@ def save_tx_detail(wallet_address, simplified_tx):
         # Close the session
         session.close()
 
+def save_token_account_create(token, signature):
+    session = Session()
+
+    try:
+        new_token_account = TokenAccount(
+            wallet_address=token['wallet'],
+            mint=token['mint'],
+            token_account=token['token_account'],
+            signature=signature
+        )
+        
+        # Add the transaction to the session
+        session.add(new_token_account)
+        # Commit the session to save all transactions
+        session.commit()
+
+    except IntegrityError as e:
+        if "UNIQUE constraint failed" in str(e):
+            next
+            # print(f"Skipping duplicate token account: {tk['token_account']}")
+        else:
+            print(f"Error saving token account: {e}")
+
+    except Exception as e:
+        print(f"Error saving token account: {e}")
+        session.rollback()
+    finally:
+        # Close the session
+        session.close()
+
 def fetch_transactions(wallet_address):
     session = Session()
     # Query the transactions for the given wallet address
     transactions = session.query(Transaction).filter_by(wallet_address=wallet_address).all()
     return transactions
+
+def fetch_token_account(token_account):
+    try: 
+        session = Session()
+        # Query the transactions for the given wallet address
+        token_account = session.query(TokenAccount).filter_by(token_account=token_account).first()
+        return token_account
+    except Exception as e:
+        print(f"Error fetching: {e}")
+
 
 def update_signature_with_data(signature, data):
     session = Session()
@@ -166,4 +271,24 @@ def update_signature_with_data(signature, data):
     finally:
         # Close the session
         session.close()
+
+def update_signature_with_processed(signature, processed=True):
+    session = Session()
+    try:
+        # Fetch the corresponding signature record
+        signature_record = session.query(Signature).filter_by(signature=signature).first()
+
+        if signature_record:
+            # Update the processed field
+            signature_record.processed = processed
+            session.commit()
+        else:
+            print(f"Signature {signature} not found.")
+    except Exception as e:
+        print(f"Error updating signature: {e}")
+        session.rollback()
+    finally:
+        # Close the session
+        session.close()
+
 
